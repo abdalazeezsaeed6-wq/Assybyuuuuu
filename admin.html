@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>لوحة التحكم والإدارة الرئيسية</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin:0; padding:0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: #1a252f; color: #333; padding: 20px; }
+    .card { background: #fff; padding: 20px; border-radius: 10px; max-width: 1000px; margin: 0 auto 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+    h1, h2 { text-align: center; color: #c0392b; margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+    th { background: #f2f2f2; }
+    button { padding: 8px 15px; background: #27ae60; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 5px; font-weight: bold; }
+    button.danger { background: #e74c3c; }
+    .form-group { margin-bottom: 12px; }
+    input, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>لوحة التحكم الرئيسية (الإدارة)</h1>
+  
+  <!-- 1. طلبات الموظفين وأكواد التفعيل -->
+  <h2>طلبات الموظفين وأكواد التفعيل</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>الاسم</th>
+        <th>الجوال</th>
+        <th>الوظيفة</th>
+        <th>كود التحقق (PIN)</th>
+        <th>الحالة</th>
+        <th>التحكم</th>
+      </tr>
+    </thead>
+    <tbody id="empTable"></tbody>
+  </table>
+
+  <!-- 2. كشوفات المرضى والتحكم والتصدير -->
+  <h2 style="margin-top:30px;">إدارة المرضى والعمليات</h2>
+  <button onclick="exportToExcel()">تصدير كافة البيانات إلى Excel</button>
+  <input type="file" id="excelFile" accept=".xlsx, .xls" style="display:none" onchange="importFromExcel(event)">
+  <button onclick="document.getElementById('excelFile').click()" style="background:#2980b9;">استيراد مرضى من Excel</button>
+
+  <table>
+    <thead>
+      <tr>
+        <th>رقم المريض</th>
+        <th>الاسم</th>
+        <th>الجوال</th>
+        <th>العين</th>
+        <th>تاريخ الطلب</th>
+        <th>الحالة</th>
+        <th>تفاصيل / ملاحظات</th>
+        <th>إجراءات</th>
+      </tr>
+    </thead>
+    <tbody id="patientsAdminTable"></tbody>
+  </table>
+
+  <!-- 3. إرسال تعميم للموظفين -->
+  <h2 style="margin-top:30px;">نشر تعميم للموظفين</h2>
+  <div class="form-group">
+    <textarea id="circularText" placeholder="اكتب التعميم هنا..."></textarea>
+  </div>
+  <button onclick="sendAdminCircular()">إرسال التعميم</button>
+</div>
+
+<script>
+  // تهيئة قاعدة بيانات Firebase
+  const firebaseConfig = { databaseURL: "https://yigd8888-default-rtdb.firebaseio.com/" };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+  
+  // تصحيح حالة الأحرف للرابط
+  const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw-fqd6nws79NBDRFr5sMKAlsZ69VXiVx8-2VFQNMKMmZENHCcdYu1VaqDRetGaWy_4aA/exec";
+
+  window.onload = function() {
+    loadEmployees();
+    loadPatients();
+  }
+
+  // عرض الموظفين
+  function loadEmployees() {
+    const tbody = document.getElementById('empTable');
+    db.ref('employees').on('value', snap => {
+      tbody.innerHTML = "";
+      if(!snap.exists()) {
+        tbody.innerHTML = "<tr><td colspan='6' style='text-align:center;'>لا يوجد طلبات موظفين حالياً</td></tr>";
+        return;
+      }
+      snap.forEach(child => {
+        const emp = child.val();
+        tbody.innerHTML += `
+          <tr>
+            <td>${emp.name || ''}</td>
+            <td>${emp.phone || ''}</td>
+            <td>${emp.job || ''}</td>
+            <td><strong>${emp.pincode || ''}</strong></td>
+            <td>${emp.status || ''}</td>
+            <td>
+              ${emp.status === 'معلق' ? `<button onclick="approveEmp('${emp.pincode}')">تفعيل الحساب</button>` : '<span style="color:green;font-weight:bold;">مفعل</span>'}
+            </td>
+          </tr>
+        `;
+      });
+    });
+  }
+
+  // تفعيل الموظف
+  function approveEmp(pincode) {
+    db.ref('employees/' + pincode).update({ status: 'مفعل' }, (error) => {
+      if(error) {
+        alert("حدث خطأ أثناء التفعيل: " + error.message);
+      } else {
+        alert("تم تفعيل حساب الموظف بنجاح!");
+      }
+    });
+  }
+
+  // عرض المرضى
+  function loadPatients() {
+    const tbody = document.getElementById('patientsAdminTable');
+    db.ref('patients').on('value', snap => {
+      tbody.innerHTML = "";
+      if(!snap.exists()) {
+        tbody.innerHTML = "<tr><td colspan='8' style='text-align:center;'>لا يوجد مرضى مسجلين حتى الآن</td></tr>";
+        return;
+      }
+      snap.forEach(child => {
+        const p = child.val();
+        tbody.innerHTML += `
+          <tr>
+            <td>${p.patientId || ''}</td>
+            <td>${p.name || ''}</td>
+            <td>${p.phone || ''}</td>
+            <td>${p.eye || ''}</td>
+            <td>${p.requestDate || ''}</td>
+            <td>${p.status || ''}</td>
+            <td>${p.detail || p.notes || ''}</td>
+            <td><button class="danger" onclick="deletePatient('${p.patientId}')">حذف</button></td>
+          </tr>
+        `;
+      });
+    });
+  }
+
+  // حذف مريض
+  function deletePatient(pId) {
+    if(confirm("هل أنت تأكد من حذف هذا المريض؟")) {
+      db.ref('patients/' + pId).remove();
+    }
+  }
+
+  // تصدير إلى Excel
+  function exportToExcel() {
+    db.ref('patients').once('value', snap => {
+      let data = [];
+      snap.forEach(c => data.push(c.val()));
+      if(data.length === 0) {
+        alert("لا توجد بيانات لتصديرها");
+        return;
+      }
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "المرضى");
+      XLSX.writeFile(wb, "كشف_المرضى.xlsx");
+    });
+  }
+
+  // استيراد من Excel
+  function importFromExcel(e) {
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+      const data = new Uint8Array(evt.target.result);
+      const workbook = XLSX.read(data, {type: 'array'});
+      const sheetName = workbook.SheetNames[0];
+      const json = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+      
+      json.forEach(row => {
+        if(row.patientId) db.ref('patients/' + row.patientId).set(row);
+      });
+      alert("تم استيراد البيانات وحفظها بنجاح!");
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // إرسال التعاميم
+  function sendAdminCircular() {
+    const text = document.getElementById('circularText').value;
+    if(!text) { alert("يرجى كتابة نص التعميم أولاً"); return; }
+
+    const data = { text: text, date: new Date().toLocaleDateString('ar-SA') };
+    db.ref('circulars').push(data);
+
+    fetch(APPS_SCRIPT_URL, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "addCircular", ...data })
+    });
+
+    alert("تم إرسال التعميم بنجاح!");
+    document.getElementById('circularText').value = "";
+  }
+</script>
+</body>
+</html>
